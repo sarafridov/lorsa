@@ -23,7 +23,7 @@ python src/retrieve.py --target_name "${ARRAY[0]}" --outpath ${ARRAY[2]}
 python src/retrieve.py --target_name "${ARRAY[3]}" --outpath ${ARRAY[5]}
 
 
-python -u  train.py \
+CUDA_VISIBLE_DEVICES=8,9 python -u  train.py \
         --base configs/custom-diffusion/${ARRAY[7]}  \
         -t --gpus 0,1 \
         --resume-from-checkpoint-custom  ${ARRAY[8]} \

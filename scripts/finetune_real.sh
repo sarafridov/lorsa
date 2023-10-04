@@ -19,9 +19,9 @@ done
 python src/retrieve.py --target_name "${ARRAY[0]}" --outpath ${ARRAY[2]}
 
 if [ "${ARRAY[4]}" == "finetune.yaml" ]; then
-    python -u  train.py \
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python -u  train.py \
             --base configs/custom-diffusion/${ARRAY[4]}  \
-            -t --gpus 0,1 \
+            -t --gpus 0,1,2,3 \
             --resume-from-checkpoint-custom  ${ARRAY[5]} \
             --caption "${ARRAY[0]}" \
             --datapath ${ARRAY[1]} \
@@ -29,9 +29,9 @@ if [ "${ARRAY[4]}" == "finetune.yaml" ]; then
             --reg_caption "${ARRAY[2]}/caption.txt" \
             --name "${ARRAY[3]}-sdv4"
 else
-    python -u  train.py \
+    CUDA_VISIBLE_DEVICES=0,3,4,6 python -u  train.py \
             --base configs/custom-diffusion/${ARRAY[4]}  \
-            -t --gpus 0,1 \
+            -t --gpus 0,1,2,3 \
             --resume-from-checkpoint-custom  ${ARRAY[5]} \
             --caption "<new1> ${ARRAY[0]}" \
             --datapath ${ARRAY[1]} \

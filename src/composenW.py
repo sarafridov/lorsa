@@ -126,7 +126,7 @@ def compose(paths, category, outpath, pretrained_model_path, regularization_prom
             config.model.params.cond_stage_config.target = 'src.custom_modules.FrozenCLIPEmbedderWrapper'
             embeds.append(model2_st['state_dict']['embed'][-1:])
             num_added_tokens1 = tokenizer.add_tokens(f'<new{count}>')
-            modifier_token_id1 = tokenizer.convert_tokens_to_ids('<new1>')
+            modifier_token_id1 = tokenizer.convert_tokens_to_ids(f'<new{count}>')
             modifier_tokens.append(True)
             if config.model.params.cond_stage_config.params.modifier_token is None:
                 config.model.params.cond_stage_config.params.modifier_token = f'<new{count}>'

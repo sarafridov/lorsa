@@ -103,9 +103,50 @@ from torchvision.utils import make_grid
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 import numpy as np
 
+class LoraInjectedLinear(nn.Module):
+    def __init__(
+        self, in_features, out_features, bias=False, r=4, dropout_p=0.1, scale=1.0
+    ):
+        super().__init__()
+
+        if r > min(in_features, out_features):
+            raise ValueError(
+                f"LoRA rank {r} must be less or equal than {min(in_features, out_features)}"
+            )
+        self.r = r
+        self.linear = nn.Linear(in_features, out_features, bias)
+        self.lora_down = nn.Linear(in_features, r, bias=False)
+        self.dropout = nn.Dropout(dropout_p)
+        self.lora_up = nn.Linear(r, out_features, bias=False)
+        self.scale = scale
+        self.selector = nn.Identity()
+
+        nn.init.normal_(self.lora_down.weight, std=1 / r)
+        nn.init.zeros_(self.lora_up.weight)
+
+    def forward(self, input):
+        return (
+            self.linear(input)
+            + self.dropout(self.lora_up(self.selector(self.lora_down(input))))
+            * self.scale
+        )
+
+    def realize_as_lora(self):
+        return self.lora_up.weight.data * self.scale, self.lora_down.weight.data
+
+    def set_selector_from_diag(self, diag: torch.Tensor):
+        # diag is a 1D tensor of size (r,)
+        assert diag.shape == (self.r,)
+        self.selector = nn.Linear(self.r, self.r, bias=False)
+        self.selector.weight.data = torch.diag(diag)
+        self.selector.weight.data = self.selector.weight.data.to(
+            self.lora_up.weight.device
+        ).to(self.lora_up.weight.dtype)
+
 class CustomDiffusion(LatentDiffusion):
     def __init__(self,
                  freeze_model='crossattn-kv',
+                 lora_rank=None,
                  cond_stage_trainable=False,
                  add_token=False,
                  *args, **kwargs):
@@ -115,22 +156,6 @@ class CustomDiffusion(LatentDiffusion):
         self.cond_stage_trainable = cond_stage_trainable
         super().__init__(cond_stage_trainable=cond_stage_trainable, *args, **kwargs)
 
-        if self.freeze_model == 'crossattn-kv':
-            for x in self.model.diffusion_model.named_parameters():
-                if 'transformer_blocks' not in x[0]:
-                    x[1].requires_grad = False
-                elif not ('attn2.to_k' in x[0] or 'attn2.to_v' in x[0]):
-                    x[1].requires_grad = False
-                else:
-                    x[1].requires_grad = True
-        elif self.freeze_model == 'crossattn':
-            for x in self.model.diffusion_model.named_parameters():
-                if 'transformer_blocks' not in x[0]:
-                    x[1].requires_grad = False
-                elif not 'attn2' in x[0]:
-                    x[1].requires_grad = False
-                else:
-                    x[1].requires_grad = True
 
         def change_checkpoint(model):
             for layer in model.children():
@@ -166,14 +191,60 @@ class CustomDiffusion(LatentDiffusion):
             return self.to_out(out)
 
         def change_forward(model):
-            for layer in model.children():
-                if type(layer) == CrossAttention:
+            for name, layer in model.named_children():
+                if type(layer) == CrossAttention and 'attn2' in name:
                     bound_method = new_forward.__get__(layer, layer.__class__)
                     setattr(layer, 'forward', bound_method)
+                    if freeze_model == "crossattn-kv-lora":
+                        for _child_name in ['to_k', 'to_v']:
+                            _child_module = layer._modules[_child_name]
+                            _tmp = LoraInjectedLinear(
+                                _child_module.in_features,
+                                _child_module.out_features,
+                                _child_module.bias is not None,
+                                r=lora_rank,
+                                dropout_p=0.0,
+                                scale=1.0,
+                                )
+                            _tmp.linear.weight = _child_module.weight
+                            
+                            if _child_module.bias is not None:
+                                _tmp.linear.bias = _child_module.bias
+
+                            _tmp.to(_child_module.weight.device).to(_child_module.weight.dtype)
+
+                            layer._modules[_child_name] = _tmp
                 else:
                     change_forward(layer)
 
         change_forward(self.model.diffusion_model)
+
+
+        if self.freeze_model == 'crossattn-kv':
+            for x in self.model.diffusion_model.named_parameters():
+                if 'transformer_blocks' not in x[0]:
+                    x[1].requires_grad = False
+                elif not ('attn2.to_k' in x[0] or 'attn2.to_v' in x[0]):
+                    x[1].requires_grad = False
+                else:
+                    x[1].requires_grad = True
+        elif self.freeze_model == 'crossattn-kv-lora':
+            for x in self.model.diffusion_model.named_parameters():
+                if 'transformer_blocks' not in x[0]:
+                    x[1].requires_grad = False
+                elif not ('lora_up' in x[0] or 'lora_down' in x[0]):
+                    x[1].requires_grad = False
+                else:
+                    x[1].requires_grad = True
+        elif self.freeze_model == 'crossattn':
+            for x in self.model.diffusion_model.named_parameters():
+                if 'transformer_blocks' not in x[0]:
+                    x[1].requires_grad = False
+                elif not 'attn2' in x[0]:
+                    x[1].requires_grad = False
+                else:
+                    x[1].requires_grad = True
+        #breakpoint()
 
     def configure_optimizers(self):
         lr = self.learning_rate
@@ -181,7 +252,10 @@ class CustomDiffusion(LatentDiffusion):
         if self.freeze_model == 'crossattn-kv':
             for x in self.model.diffusion_model.named_parameters():
                 if 'transformer_blocks' in x[0]:
-                    if 'attn2.to_k' in x[0] or 'attn2.to_v' in x[0]:
+                    # if 'attn2.to_k' in x[0] or 'attn2.to_v' in x[0]:
+                    #     params += [x[1]]
+                    #     print(x[0])
+                    if 'lora_up' in x[0] or 'lora_down' in x[0]:
                         params += [x[1]]
                         print(x[0])
         elif self.freeze_model == 'crossattn':

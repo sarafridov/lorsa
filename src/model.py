@@ -195,25 +195,6 @@ class CustomDiffusion(LatentDiffusion):
                 if type(layer) == CrossAttention and 'attn2' in name:
                     bound_method = new_forward.__get__(layer, layer.__class__)
                     setattr(layer, 'forward', bound_method)
-                    if freeze_model == "crossattn-kv-lora":
-                        for _child_name in ['to_k', 'to_v']:
-                            _child_module = layer._modules[_child_name]
-                            _tmp = LoraInjectedLinear(
-                                _child_module.in_features,
-                                _child_module.out_features,
-                                _child_module.bias is not None,
-                                r=lora_rank,
-                                dropout_p=0.0,
-                                scale=1.0,
-                                )
-                            _tmp.linear.weight = _child_module.weight
-                            
-                            if _child_module.bias is not None:
-                                _tmp.linear.bias = _child_module.bias
-
-                            _tmp.to(_child_module.weight.device).to(_child_module.weight.dtype)
-
-                            layer._modules[_child_name] = _tmp
                 else:
                     change_forward(layer)
 
@@ -245,6 +226,32 @@ class CustomDiffusion(LatentDiffusion):
                 else:
                     x[1].requires_grad = True
         #breakpoint()
+
+    def inject_trainable_lora(self, lora_rank):
+        def change_forward(model):
+            for name, layer in model.named_children():
+                if type(layer) == CrossAttention and 'attn2' in name:
+                    for _child_name in ['to_k', 'to_v']:
+                        _child_module = layer._modules[_child_name]
+                        _tmp = LoraInjectedLinear(
+                            _child_module.in_features,
+                            _child_module.out_features,
+                            _child_module.bias is not None,
+                            r=lora_rank,
+                            dropout_p=0.0,
+                            scale=1.0,
+                            )
+                        _tmp.linear.weight = _child_module.weight
+                        
+                        if _child_module.bias is not None:
+                            _tmp.linear.bias = _child_module.bias
+
+                        _tmp.to(_child_module.weight.device).to(_child_module.weight.dtype)
+
+                        layer._modules[_child_name] = _tmp
+                else:
+                    change_forward(layer)
+        change_forward(self.model.diffusion_model)
 
     def configure_optimizers(self):
         lr = self.learning_rate

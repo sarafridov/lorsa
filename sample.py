@@ -115,6 +115,8 @@ def load_model_from_config(config, ckpt, verbose=False):
         print(f"Global Step: {pl_sd['global_step']}")
     sd = pl_sd["state_dict"]
     model = instantiate_from_config(config.model)
+    if config.model.params.freeze_model == 'crossattn-kv-lora':
+        model.inject_trainable_lora(config.model.params.lora_rank)
 
     token_weights = sd["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]
     del sd["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]

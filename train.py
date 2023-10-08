@@ -766,6 +766,9 @@ if __name__ == "__main__":
             del st["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]
             model.load_state_dict(st, strict=False)
             model.cond_stage_model.transformer.text_model.embeddings.token_embedding.weight.data[:token_weights.shape[0]] = token_weights 
+            if config.model.params.freeze_model == 'crossattn-kv-lora':
+                model.inject_trainable_lora(config.model.params.lora_rank)
+                
         if opt.delta_ckpt is not None:
             st = torch.load(opt.delta_ckpt)
             embed = None

@@ -259,9 +259,12 @@ class CustomDiffusion(LatentDiffusion):
         if self.freeze_model == 'crossattn-kv':
             for x in self.model.diffusion_model.named_parameters():
                 if 'transformer_blocks' in x[0]:
-                    # if 'attn2.to_k' in x[0] or 'attn2.to_v' in x[0]:
-                    #     params += [x[1]]
-                    #     print(x[0])
+                    if 'attn2.to_k' in x[0] or 'attn2.to_v' in x[0]:
+                        params += [x[1]]
+                        print(x[0])
+        elif self.freeze_model == 'crossattn-kv-lora':
+            for x in self.model.diffusion_model.named_parameters():
+                if 'transformer_blocks' in x[0]:
                     if 'lora_up' in x[0] or 'lora_down' in x[0]:
                         params += [x[1]]
                         print(x[0])

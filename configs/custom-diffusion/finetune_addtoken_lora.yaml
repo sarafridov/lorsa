@@ -109,7 +109,7 @@ model:
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_ema: False
-    lora_rank: 30
+    lora_rank: 10
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

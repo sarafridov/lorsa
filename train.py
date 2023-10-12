@@ -448,14 +448,22 @@ class ShrinkageCallback(Callback):
         self.model = model
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
-        for name, layer in self.model.model.diffusion_model.named_children():
-            print(f'trying to call shrinkage, level 1')
-            print(f'type(layer) is {type(layer)}, name is {name}')
-            if type(layer) == CrossAttention and 'attn2' in name:  # TODO: try changing this so all the linear layers get edited
-                print(f'trying to call shrinkage, level 2')
-                for _child_name in ['to_k', 'to_v']:
-                    print(f'trying to call shrinkage, level 3')
-                    layer._modules[_child_name].apply_shrinkage()
+        for name, layer in self.model.model.diffusion_model.named_parameters():
+            # print(f'trying to call shrinkage, level 1')
+            # print(f'type(layer) is {type(layer)}, name is {name}')
+            if 'sparse_linear' in name:  # TODO: try changing this so all the linear layers get edited
+                # print(f'trying to call shrinkage, level 2')
+                # for _child_name in ['to_k', 'to_v']:
+                    # print(f'trying to call shrinkage, level 3')
+                    # layer._modules[_child_name].apply_shrinkage()
+                    # Apply L1 shrinkage to the sparse linear component
+                matrix = layer.data
+                signs = torch.sign(matrix)
+                absvals = torch.abs(matrix)
+                absvals = torch.clamp(absvals - self.model.shrinkage_threshold, min=0)
+                sparsity = torch.sum(absvals.flatten() == 0) / len(absvals.flatten())
+                print(f'{sparsity*100} percent of the sparse weights are zero')
+                layer.data = signs * absvals
 
 
 class SetupCallback(Callback):

@@ -168,9 +168,6 @@ class LorsaInjectedLinear(nn.Module):
         nn.init.zeros_(self.lora_up.weight)
 
     def forward(self, input):
-        matrix = self.sparse_linear.weight.data
-        sparsity = torch.sum((matrix == 0).flatten()) / len(matrix.flatten())
-        print(f'{sparsity} percent of the sparse weights are nonzero')
         return (
             self.linear(input)
             + self.sparse_linear(input)
@@ -214,6 +211,7 @@ class CustomDiffusion(LatentDiffusion):
         self.freeze_model = freeze_model
         self.add_token = add_token
         self.cond_stage_trainable = cond_stage_trainable
+        self.shrinkage_threshold = shrinkage_threshold
         super().__init__(cond_stage_trainable=cond_stage_trainable, *args, **kwargs)
 
 

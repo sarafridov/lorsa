@@ -449,14 +449,8 @@ class ShrinkageCallback(Callback):
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         for name, layer in self.model.model.diffusion_model.named_parameters():
-            # print(f'trying to call shrinkage, level 1')
-            # print(f'type(layer) is {type(layer)}, name is {name}')
-            if 'sparse_linear' in name:  # TODO: try changing this so all the linear layers get edited
-                # print(f'trying to call shrinkage, level 2')
-                # for _child_name in ['to_k', 'to_v']:
-                    # print(f'trying to call shrinkage, level 3')
-                    # layer._modules[_child_name].apply_shrinkage()
-                    # Apply L1 shrinkage to the sparse linear component
+            if 'sparse_linear' in name: 
+                # Do L1 shrinkage
                 matrix = layer.data
                 signs = torch.sign(matrix)
                 absvals = torch.abs(matrix)
@@ -799,8 +793,6 @@ if __name__ == "__main__":
                 print(f'******************* using LoRSA ********************')
                 print(f'****************************************************')
                 model.inject_trainable_lorsa(config.model.params.lora_rank, config.model.params.shrinkage_threshold)
-
-            # TODO: figure out where to actually do the shrinkage, and make a config for lorsa
                 
         if opt.delta_ckpt is not None:
             st = torch.load(opt.delta_ckpt)

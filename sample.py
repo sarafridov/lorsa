@@ -117,6 +117,8 @@ def load_model_from_config(config, ckpt, verbose=False):
     model = instantiate_from_config(config.model)
     if config.model.params.freeze_model == 'crossattn-kv-lora':
         model.inject_trainable_lora(config.model.params.lora_rank)
+    elif config.model.params.freeze_model == 'crossattn-kv-lorsa':
+        model.inject_trainable_lorsa(config.model.params.lora_rank, config.model.params.shrinkage_threshold)
 
     token_weights = sd["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]
     del sd["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]

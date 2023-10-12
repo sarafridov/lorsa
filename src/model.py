@@ -170,21 +170,10 @@ class LorsaInjectedLinear(nn.Module):
     def forward(self, input):
         return (
             self.linear(input)
-            + self.sparse_linear(input)
+            + self.dropout(self.sparse_linear(input))  # wow dropout makes a huge difference
             + self.dropout(self.lora_up(self.selector(self.lora_down(input))))
             * self.scale
         )
-    
-    def apply_shrinkage(self):
-        # Apply L1 shrinkage to the sparse linear component
-        matrix = self.sparse_linear.weight.data
-        signs = torch.sign(matrix)
-        absvals = torch.abs(matrix)
-        absvals = torch.max(absvals - self.shrinkage_threshold, 0)
-        sparsity = torch.sum(absvals.flatten() == 0) / len(absvals.flatten())
-        import pdb; pdb.set_trace()
-        print(f'{sparsity} percent of the sparse weights are nonzero')
-        self.sparse_linear.weight.data = signs * absvals
 
     def realize_as_lorsa(self):
         return self.lora_up.weight.data * self.scale, self.lora_down.weight.data, self.sparse_linear.weight.data

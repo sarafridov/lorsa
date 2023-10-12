@@ -143,10 +143,70 @@ class LoraInjectedLinear(nn.Module):
             self.lora_up.weight.device
         ).to(self.lora_up.weight.dtype)
 
+
+class LorsaInjectedLinear(nn.Module):
+    def __init__(
+        self, in_features, out_features, bias=False, r=4, dropout_p=0.1, scale=1.0, shrinkage_threshold=0.001,
+    ):
+        super().__init__()
+
+        if r > min(in_features, out_features):
+            raise ValueError(
+                f"LoRA rank {r} must be less or equal than {min(in_features, out_features)}"
+            )
+        self.r = r
+        self.linear = nn.Linear(in_features, out_features, bias)
+        self.lora_down = nn.Linear(in_features, r, bias=False)
+        self.dropout = nn.Dropout(dropout_p)
+        self.lora_up = nn.Linear(r, out_features, bias=False)
+        self.scale = scale
+        self.selector = nn.Identity()
+        self.sparse_linear = nn.Linear(in_features, out_features, bias)
+        self.shrinkage_threshold = shrinkage_threshold
+
+        nn.init.normal_(self.lora_down.weight, std=1 / r)
+        nn.init.zeros_(self.lora_up.weight)
+
+    def forward(self, input):
+        matrix = self.sparse_linear.weight.data
+        sparsity = torch.sum((matrix == 0).flatten()) / len(matrix.flatten())
+        print(f'{sparsity} percent of the sparse weights are nonzero')
+        return (
+            self.linear(input)
+            + self.sparse_linear(input)
+            + self.dropout(self.lora_up(self.selector(self.lora_down(input))))
+            * self.scale
+        )
+    
+    def apply_shrinkage(self):
+        # Apply L1 shrinkage to the sparse linear component
+        matrix = self.sparse_linear.weight.data
+        signs = torch.sign(matrix)
+        absvals = torch.abs(matrix)
+        absvals = torch.max(absvals - self.shrinkage_threshold, 0)
+        sparsity = torch.sum(absvals.flatten() == 0) / len(absvals.flatten())
+        import pdb; pdb.set_trace()
+        print(f'{sparsity} percent of the sparse weights are nonzero')
+        self.sparse_linear.weight.data = signs * absvals
+
+    def realize_as_lorsa(self):
+        return self.lora_up.weight.data * self.scale, self.lora_down.weight.data, self.sparse_linear.weight.data
+
+    def set_selector_from_diag(self, diag: torch.Tensor):
+        # diag is a 1D tensor of size (r,)
+        assert diag.shape == (self.r,)
+        self.selector = nn.Linear(self.r, self.r, bias=False)
+        self.selector.weight.data = torch.diag(diag)
+        self.selector.weight.data = self.selector.weight.data.to(
+            self.lora_up.weight.device
+        ).to(self.lora_up.weight.dtype)
+
+
 class CustomDiffusion(LatentDiffusion):
     def __init__(self,
                  freeze_model='crossattn-kv',
                  lora_rank=None,
+                 shrinkage_threshold=0.0,
                  cond_stage_trainable=False,
                  add_token=False,
                  *args, **kwargs):
@@ -217,6 +277,14 @@ class CustomDiffusion(LatentDiffusion):
                     x[1].requires_grad = False
                 else:
                     x[1].requires_grad = True
+        elif self.freeze_model == 'crossattn-kv-lorsa':
+            for x in self.model.diffusion_model.named_parameters():
+                if 'transformer_blocks' not in x[0]:
+                    x[1].requires_grad = False
+                elif not ('lora_up' in x[0] or 'lora_down' in x[0] or 'sparse_linear' in x[0]):
+                    x[1].requires_grad = False
+                else:
+                    x[1].requires_grad = True
         elif self.freeze_model == 'crossattn':
             for x in self.model.diffusion_model.named_parameters():
                 if 'transformer_blocks' not in x[0]:
@@ -253,6 +321,34 @@ class CustomDiffusion(LatentDiffusion):
                     change_forward(layer)
         change_forward(self.model.diffusion_model)
 
+    def inject_trainable_lorsa(self, lora_rank, shrinkage_threshold):
+        def change_forward(model):
+            for name, layer in model.named_children():
+                # print(f'layer type is {type(layer)} and layer name is {name}')
+                if type(layer) == CrossAttention and 'attn2' in name:  # TODO: try changing this so all the linear layers get edited
+                    for _child_name in ['to_k', 'to_v']:
+                        _child_module = layer._modules[_child_name]
+                        _tmp = LorsaInjectedLinear(
+                            _child_module.in_features,
+                            _child_module.out_features,
+                            _child_module.bias is not None,
+                            r=lora_rank,
+                            dropout_p=0.0,
+                            scale=1.0,
+                            shrinkage_threshold=shrinkage_threshold,
+                            )
+                        _tmp.linear.weight = _child_module.weight
+                        
+                        if _child_module.bias is not None:
+                            _tmp.linear.bias = _child_module.bias
+
+                        _tmp.to(_child_module.weight.device).to(_child_module.weight.dtype)
+
+                        layer._modules[_child_name] = _tmp
+                else:
+                    change_forward(layer)
+        change_forward(self.model.diffusion_model)
+
     def configure_optimizers(self):
         lr = self.learning_rate
         params = []
@@ -262,12 +358,12 @@ class CustomDiffusion(LatentDiffusion):
                     if 'attn2.to_k' in x[0] or 'attn2.to_v' in x[0]:
                         params += [x[1]]
                         print(x[0])
-        elif self.freeze_model == 'crossattn-kv-lora':
+        elif self.freeze_model == 'crossattn-kv-lora' or self.freeze_model == 'crossattn-kv-lorsa':
             for x in self.model.diffusion_model.named_parameters():
                 if 'transformer_blocks' in x[0]:
-                    if 'lora_up' in x[0] or 'lora_down' in x[0]:
+                    if 'lora_up' in x[0] or 'lora_down' in x[0] or 'sparse_linear' in x[0]:
                         params += [x[1]]
-                        print(x[0])
+                        # print(x[0])
         elif self.freeze_model == 'crossattn':
             for x in self.model.diffusion_model.named_parameters():
                 if 'transformer_blocks' in x[0]:

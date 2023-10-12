@@ -112,6 +112,7 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
+from ldm.modules.attention import CrossAttention as CrossAttention
 
 
 def get_parser(**parser_kwargs):
@@ -438,6 +439,23 @@ class DataModuleFromConfig(pl.LightningDataModule):
             init_fn = None
         return DataLoader(self.datasets["predict"], batch_size=self.batch_size,
                           num_workers=self.num_workers, worker_init_fn=init_fn)
+
+
+# Used to apply L1 shrinkage operator for the sparse weights in LoRSA
+class ShrinkageCallback(Callback):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+        for name, layer in self.model.model.diffusion_model.named_children():
+            print(f'trying to call shrinkage, level 1')
+            print(f'type(layer) is {type(layer)}, name is {name}')
+            if type(layer) == CrossAttention and 'attn2' in name:  # TODO: try changing this so all the linear layers get edited
+                print(f'trying to call shrinkage, level 2')
+                for _child_name in ['to_k', 'to_v']:
+                    print(f'trying to call shrinkage, level 3')
+                    layer._modules[_child_name].apply_shrinkage()
 
 
 class SetupCallback(Callback):
@@ -768,6 +786,13 @@ if __name__ == "__main__":
             model.cond_stage_model.transformer.text_model.embeddings.token_embedding.weight.data[:token_weights.shape[0]] = token_weights 
             if config.model.params.freeze_model == 'crossattn-kv-lora':
                 model.inject_trainable_lora(config.model.params.lora_rank)
+            if config.model.params.freeze_model == 'crossattn-kv-lorsa':
+                print(f'****************************************************')
+                print(f'******************* using LoRSA ********************')
+                print(f'****************************************************')
+                model.inject_trainable_lorsa(config.model.params.lora_rank, config.model.params.shrinkage_threshold)
+
+            # TODO: figure out where to actually do the shrinkage, and make a config for lorsa
                 
         if opt.delta_ckpt is not None:
             st = torch.load(opt.delta_ckpt)
@@ -776,7 +801,7 @@ if __name__ == "__main__":
                 embed = st['embed'].reshape(-1, 768)
             if 'state_dict' in st:
                 st = st['state_dict']
-            print("restroting from delta model from previous version")
+            print("restarting from delta model from previous version")
             st1 = model.state_dict()
             for each in st1.keys():
                 if each in st.keys():
@@ -908,6 +933,8 @@ if __name__ == "__main__":
             del callbacks_cfg['ignore_keys_callback']
 
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
+        if config.model.params.freeze_model == 'crossattn-kv-lorsa':
+            trainer_kwargs["callbacks"] = trainer_kwargs["callbacks"] + [ShrinkageCallback(model)]
 
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir

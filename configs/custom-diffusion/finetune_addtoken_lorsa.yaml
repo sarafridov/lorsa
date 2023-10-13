@@ -109,8 +109,8 @@ model:
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_ema: False
-    lora_rank: 10
-    shrinkage_threshold: 0.0001
+    lora_rank: 2
+    shrinkage_threshold: 0.00006
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

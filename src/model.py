@@ -170,7 +170,7 @@ class LorsaInjectedLinear(nn.Module):
     def forward(self, input):
         return (
             self.linear(input)
-            + self.dropout(self.sparse_linear(input))  # wow dropout makes a huge difference
+            + self.dropout(self.sparse_linear(input))
             + self.dropout(self.lora_up(self.selector(self.lora_down(input))))
             * self.scale
         )

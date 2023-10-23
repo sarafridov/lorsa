@@ -330,8 +330,9 @@ def main():
         os.makedirs(opt.outdir, exist_ok=True)
         outpath = opt.outdir
 
-    metric = ClipMetrics(device=device, datapath=opt.datapath)
-    dmetric = DinoMetrics(device=device, datapath=opt.datapath)
+    # metric = ClipMetrics(device=device, datapath=opt.datapath)
+    # dmetric = DinoMetrics(device=device, datapath=opt.datapath)
+    fmetric = FaceMetrics(datapath=opt.datapath)
 
     batch_size = opt.n_samples
     if not opt.from_file:
@@ -358,9 +359,10 @@ def main():
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
-                running_avg_clip_t = 0.
-                running_avg_clip_i = 0.
-                running_avg_dino = 0.
+                # running_avg_clip_t = 0.
+                # running_avg_clip_i = 0.
+                # running_avg_dino = 0.
+                running_avg_face = 0.
                 epochs = opt.total_samples//opt.n_samples
                 for epoch in range(epochs):
                     for prompts in tqdm(data, desc="data"):
@@ -392,16 +394,19 @@ def main():
                             for x_sample in x_samples_ddim:
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                 all_samples.append(x_sample)
-                        running_avg_clip_t += torch.mean(metric.clip_t(all_samples, prompts[0]))
-                        running_avg_clip_i += torch.mean(metric.clip_i(all_samples))
-                        running_avg_dino += torch.mean(dmetric.dino(all_samples))
-                    running_avg_clip_t /= len(data)
-                    running_avg_clip_i /= len(data)
-                    running_avg_dino /= len(data)
+                        running_avg_face += torch.mean(fmetric.arcface(all_samples))
+                    running_avg_face /= len(data)
+                    #     running_avg_clip_t += torch.mean(metric.clip_t(all_samples, prompts[0]))
+                    #     running_avg_clip_i += torch.mean(metric.clip_i(all_samples))
+                    #     running_avg_dino += torch.mean(dmetric.dino(all_samples))
+                    # running_avg_clip_t /= len(data)
+                    # running_avg_clip_i /= len(data)
+                    # running_avg_dino /= len(data)
 
-    print(running_avg_clip_t)
-    print(running_avg_clip_i)
-    print(running_avg_dino)
+    # print(running_avg_clip_t)
+    # print(running_avg_clip_i)
+    # print(running_avg_dino)
+    print(running_avg_face)
 
 
 if __name__ == "__main__":

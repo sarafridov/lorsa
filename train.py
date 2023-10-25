@@ -786,13 +786,21 @@ if __name__ == "__main__":
             del st["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]
             model.load_state_dict(st, strict=False)
             model.cond_stage_model.transformer.text_model.embeddings.token_embedding.weight.data[:token_weights.shape[0]] = token_weights 
-            if config.model.params.freeze_model == 'crossattn-kv-lora':
+            if 'lora' in config.model.params.freeze_model:
+                print(f'****************************************************')
+                print(f'******************* using LoRA ********************')
+                print(f'****************************************************')
                 model.inject_trainable_lora(config.model.params.lora_rank)
-            if config.model.params.freeze_model == 'crossattn-kv-lorsa':
+            elif 'lorsa' in config.model.params.freeze_model:
                 print(f'****************************************************')
                 print(f'******************* using LoRSA ********************')
                 print(f'****************************************************')
                 model.inject_trainable_lorsa(config.model.params.lora_rank, config.model.params.shrinkage_threshold)
+            else:
+                print(f'****************************************************')
+                print(f'******************* full linear ********************')
+                print(f'****************************************************')
+                model.inject_trainable_linear()
                 
         if opt.delta_ckpt is not None:
             st = torch.load(opt.delta_ckpt)

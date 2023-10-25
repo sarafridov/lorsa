@@ -108,7 +108,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 import wandb
 from sample import load_model_from_config
-from src.metrics import ClipMetrics, DinoMetrics
+from src.metrics import ClipMetrics, DinoMetrics, FaceMetrics
 
 def main():
     parser = argparse.ArgumentParser()
@@ -394,7 +394,7 @@ def main():
                             for x_sample in x_samples_ddim:
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                 all_samples.append(x_sample)
-                        running_avg_face += torch.mean(fmetric.arcface(all_samples))
+                        running_avg_face += np.mean(fmetric.arcface(all_samples))
                     running_avg_face /= len(data)
                     #     running_avg_clip_t += torch.mean(metric.clip_t(all_samples, prompts[0]))
                     #     running_avg_clip_i += torch.mean(metric.clip_i(all_samples))

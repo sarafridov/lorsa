@@ -3,8 +3,7 @@ import os
 from src.finetune_data import isimage
 from PIL import Image
 import torch
-from deepface import DeepFace
-from deepface.commons import functions
+import insightface
 import numpy as np
 
 class ClipMetrics():
@@ -46,8 +45,10 @@ class ClipMetrics():
 
 
 class FaceMetrics():
-    def __init__(self, datapath: str, model_name: str = "ArcFace"):
-        self.model = DeepFace.build_model(model_name)
+    def __init__(self, datapath: str, model_name: str = "/home/datasets/model.onnx"):
+        model = insightface.model_zoo.get_model(model_name)
+        model.prepare(ctx_id=0, input_size=(112, 112))
+        self.model = model
         self.model_name = model_name
 
         self.image_paths = [os.path.join(datapath, file_path) for file_path in os.listdir(datapath) if isimage(file_path)]
@@ -55,36 +56,15 @@ class FaceMetrics():
         self.real_img_features = real_img_features / np.linalg.norm(real_img_features, axis=-1)[:, None]
     
     def arcface(self, generated_images):
-
-        gen_img_features = np.array([self.gen_embeddings(i.cpu().detach().numpy()) for i in processed_gen_input])
+        gen_img_features = np.array([self.gen_embeddings((i).astype(np.uint8)) for i in generated_images])
         gen_img_features = gen_img_features / np.linalg.norm(gen_img_features, axis=-1)[:, None]
 
-        score = torch.mean(torch.stack([(gen_img_features * self.real_img_features[i]).sum(axis=-1) for i in range(self.real_img_features.shape[0])]))
+        score = np.mean(np.stack([(gen_img_features * self.real_img_features[i]).sum(axis=-1) for i in range(self.real_img_features.shape[0])]))
         return score
     
-    def gen_embeddings(self, img,
-            enforce_detection=True,
-            detector_backend="opencv",
-            align=True,
-            normalization="base"):
-        target_size = functions.find_target_size(model_name=self.model_name)
-        img_objs = functions.extract_faces(
-            img=img,
-            target_size=target_size,
-            detector_backend=detector_backend,
-            grayscale=False,
-            enforce_detection=enforce_detection,
-            align=align,
-        )
-
-        for img, region, confidence in img_objs:
-            # custom normalization
-            img = functions.normalize_input(img=img, normalization=normalization)
-
-            # represent
-            embedding = self.model(img, training=False).numpy()[0].tolist()
-
-            return embedding
+    def gen_embeddings(self, img):
+        embedding = self.model.get_feat(img)
+        return embedding
 
 class DinoMetrics():
     def __init__(self, device, datapath: str, model: str = "facebook/dino-vitb8"):

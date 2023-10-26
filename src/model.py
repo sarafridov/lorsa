@@ -94,6 +94,7 @@ import torch
 from einops import rearrange, repeat
 from torch import nn, einsum
 
+import torch.nn.functional as F
 from ldm.models.diffusion.ddpm import LatentDiffusion as LatentDiffusion
 from ldm.util import default
 from ldm.modules.attention import BasicTransformerBlock as BasicTransformerBlock
@@ -107,7 +108,7 @@ from typing import Optional, List, Type, Set
 
 class LoraInjectedLinear(nn.Module):
     def __init__(
-        self, in_features, out_features, bias=False, r=4, dropout_p=0.1, scale=1.0
+        self, in_features, out_features, bias=False, old_weight=None, old_bias=None, device=None, dtype=None, r=4
     ):
         super().__init__()
 
@@ -116,25 +117,20 @@ class LoraInjectedLinear(nn.Module):
                 f"LoRA rank {r} must be less or equal than {min(in_features, out_features)}"
             )
         self.r = r
-        self.injected_linear = nn.Linear(in_features, out_features, bias)
-        self.lora_down = nn.Linear(in_features, r, bias=False)
-        self.dropout = nn.Dropout(dropout_p)
-        self.lora_up = nn.Linear(r, out_features, bias=False)
-        self.scale = scale
-        self.selector = nn.Identity()
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        
+        self.old_weight = old_weight
+        self.old_bias = old_bias
+        self.lora_down = torch.nn.Parameter(torch.zeros((out_features, r), **factory_kwargs))
+        self.lora_up = torch.nn.Parameter(torch.zeros((r, in_features), **factory_kwargs))
 
-        nn.init.normal_(self.lora_down.weight, std=1 / r)
-        nn.init.zeros_(self.lora_up.weight)
+    def forward(self, x):
+        weight = self.old_weight + self.lora_down @ self.lora_up
+        output = F.linear(x, weight, bias=self.old_bias)
+        return output
 
-    def forward(self, input):
-        return (
-            self.injected_linear(input)
-            + self.dropout(self.lora_up(self.selector(self.lora_down(input))))
-            * self.scale
-        )
-
-    def realize_as_lora(self):
-        return self.lora_up.weight.data * self.scale, self.lora_down.weight.data
+    def realize_as_lorsa(self):
+        return self.lora_up, self.lora_down
 
     def set_selector_from_diag(self, diag: torch.Tensor):
         # diag is a 1D tensor of size (r,)
@@ -148,7 +144,7 @@ class LoraInjectedLinear(nn.Module):
 
 class LorsaInjectedLinear(nn.Module):
     def __init__(
-        self, in_features, out_features, bias=False, r=4, dropout_p=0.1, scale=1.0, shrinkage_threshold=0.001,
+        self, in_features, out_features, bias=False, old_weight=None, old_bias=None, device=None, dtype=None, r=4, shrinkage_threshold=0.001,
     ):
         super().__init__()
 
@@ -157,28 +153,22 @@ class LorsaInjectedLinear(nn.Module):
                 f"LoRA rank {r} must be less or equal than {min(in_features, out_features)}"
             )
         self.r = r
-        self.injected_linear = nn.Linear(in_features, out_features, bias)
-        self.lora_down = nn.Linear(in_features, r, bias=False)
-        self.dropout = nn.Dropout(dropout_p)
-        self.lora_up = nn.Linear(r, out_features, bias=False)
-        self.scale = scale
-        self.selector = nn.Identity()
-        self.sparse_linear = nn.Linear(in_features, out_features, bias)
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        
+        self.old_weight = old_weight
+        self.old_bias = old_bias
+        self.lora_down = torch.nn.Parameter(torch.zeros((out_features, r), **factory_kwargs))
+        self.lora_up = torch.nn.Parameter(torch.zeros((r, in_features), **factory_kwargs))
+        self.sparsity = torch.nn.Parameter(torch.randn((out_features, in_features), **factory_kwargs))
         self.shrinkage_threshold = shrinkage_threshold
 
-        nn.init.normal_(self.lora_down.weight, std=1 / r)
-        nn.init.zeros_(self.lora_up.weight)
-
-    def forward(self, input):
-        return (
-            self.injected_linear(input)
-            + self.dropout(self.sparse_linear(input))
-            + self.dropout(self.lora_up(self.selector(self.lora_down(input))))
-            * self.scale
-        )
+    def forward(self, x):
+        weight = self.old_weight + self.sparsity + self.lora_down @ self.lora_up
+        output = F.linear(x, weight, bias=self.old_bias)
+        return output
 
     def realize_as_lorsa(self):
-        return self.lora_up.weight.data * self.scale, self.lora_down.weight.data, self.sparse_linear.weight.data
+        return self.lora_up, self.lora_down, self.sparsity
 
     def set_selector_from_diag(self, diag: torch.Tensor):
         # diag is a 1D tensor of size (r,)
@@ -200,19 +190,22 @@ class LorsaInjectedLinear(nn.Module):
 
 class InjectedLinear(nn.Module):
     def __init__(
-        self, in_features, out_features, bias=False,
+        self, in_features, out_features, bias=False, old_weight=None, old_bias=None, device=None, dtype=None
     ):
         super().__init__()
+        factory_kwargs = {'device': device, 'dtype': dtype}
 
-        self.injected_linear = nn.Linear(in_features, out_features, bias)
-        self.extra_linear = nn.Linear(in_features, out_features, bias)
-        self.selector = nn.Identity()
-        nn.init.zeros_(self.extra_linear.weight)
+        self.injected_linear_weight = torch.nn.Parameter(torch.zeros((out_features, in_features), **factory_kwargs))
+        self.injected_linear_bias = torch.nn.Parameter(torch.zeros((out_features), **factory_kwargs)) if bias else None
+        self.old_weight = old_weight
+        self.old_bias = old_bias
+        # self.selector = nn.Identity()
 
-    def forward(self, input):
-        return (
-            self.injected_linear(input) + self.extra_linear(input)
-        )
+    def forward(self, x):
+        weight = self.old_weight + self.injected_linear_weight
+        bias = self.old_bias + self.injected_linear_bias if self.old_bias else None
+        output = F.linear(x, weight, bias=bias)
+        return output
 
     def set_selector_from_diag(self, diag: torch.Tensor):
         # diag is a 1D tensor of size (r,)
@@ -310,41 +303,41 @@ class CustomDiffusion(LatentDiffusion):
 
         change_checkpoint(self.model.diffusion_model)
 
-        def new_forward(self, x, context=None, mask=None):
-            h = self.heads
-            crossattn = False
-            if context is not None:
-                crossattn = True
-            q = self.to_q(x)
-            context = default(context, x)
-            k = self.to_k(context)
-            v = self.to_v(context)
+        # def new_forward(self, x, context=None, mask=None):
+        #     h = self.heads
+        #     crossattn = False
+        #     if context is not None:
+        #         crossattn = True
+        #     q = self.to_q(x)
+        #     context = default(context, x)
+        #     k = self.to_k(context)
+        #     v = self.to_v(context)
 
-            if crossattn:
-                modifier = torch.ones_like(k)
-                modifier[:, :1, :] = modifier[:, :1, :]*0.
-                k = modifier*k + (1-modifier)*k.detach()
-                v = modifier*v + (1-modifier)*v.detach()
+        #     if crossattn:
+        #         modifier = torch.ones_like(k)
+        #         modifier[:, :1, :] = modifier[:, :1, :]*0.
+        #         k = modifier*k + (1-modifier)*k.detach()
+        #         v = modifier*v + (1-modifier)*v.detach()
 
-            q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
-            sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
-            attn = sim.softmax(dim=-1)
+        #     q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+        #     sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+        #     attn = sim.softmax(dim=-1)
 
-            out = einsum('b i j, b j d -> b i d', attn, v)
-            out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
-            return self.to_out(out)
+        #     out = einsum('b i j, b j d -> b i d', attn, v)
+        #     out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        #     return self.to_out(out)
 
-        def change_forward(model):
-            for name, layer in model.named_children():
-                if type(layer) == CrossAttention and 'attn2' in name:
-                    bound_method = new_forward.__get__(layer, layer.__class__)
-                    setattr(layer, 'forward', bound_method)
-                else:
-                    change_forward(layer)
+        # def change_forward(model):
+        #     for name, layer in model.named_children():
+        #         if type(layer) == CrossAttention and 'attn2' in name:
+        #             bound_method = new_forward.__get__(layer, layer.__class__)
+        #             setattr(layer, 'forward', bound_method)
+        #         else:
+        #             change_forward(layer)
 
-        change_forward(self.model.diffusion_model)
+        # change_forward(self.model.diffusion_model)
 
-        # At first, set all parameters to not be updated
+        # # At first, set all parameters to not be updated
         for x in self.model.diffusion_model.named_parameters():
             x[1].requires_grad = False
 
@@ -417,24 +410,21 @@ class CustomDiffusion(LatentDiffusion):
                     _child_module.in_features,
                     _child_module.out_features,
                     _child_module.bias is not None,
+                    _child_module.weight,
+                    _child_module.bias,
+                    device=_child_module.weight.device,
+                    dtype=_child_module.weight.dtype,
                     r=lora_rank,
-                    dropout_p=0.0,
-                    scale=1.0,
                     )
-                _tmp.injected_linear.weight = _child_module.weight
-                
-                if _child_module.bias is not None:
-                    _tmp.injected_linear.bias = _child_module.bias
-
-                _tmp.to(_child_module.weight.device).to(_child_module.weight.dtype)
 
                 _module._modules[name] = _tmp
 
-                # Allow the LoRA weights to update
-                self.require_grad_params.append({'params': _module._modules[name].lora_up.parameters()})
-                self.require_grad_params.append({'params': _module._modules[name].lora_down.parameters()})
-                _module._modules[name].lora_up.weight.requires_grad = True
-                _module._modules[name].lora_down.weight.requires_grad = True
+                # Allow the LoRSA weights to update
+                self.require_grad_params.append({'params': _module._modules[name].lora_up})
+                self.require_grad_params.append({'params': _module._modules[name].lora_down})
+                _module._modules[name].lora_up.requires_grad = True
+                _module._modules[name].lora_down.requires_grad = True
+                _module._modules[name].sparsity.requires_grad = True
                 self.names.append(name)
         change_forward(self.model.diffusion_model)
 
@@ -451,27 +441,23 @@ class CustomDiffusion(LatentDiffusion):
                     _child_module.in_features,
                     _child_module.out_features,
                     _child_module.bias is not None,
+                    _child_module.weight,
+                    _child_module.bias,
+                    device=_child_module.weight.device,
+                    dtype=_child_module.weight.dtype,
                     r=lora_rank,
-                    dropout_p=0.0,
-                    scale=1.0,
                     shrinkage_threshold=shrinkage_threshold,
                     )
-                _tmp.injected_linear.weight = _child_module.weight
-                
-                if _child_module.bias is not None:
-                    _tmp.injected_linear.bias = _child_module.bias
-
-                _tmp.to(_child_module.weight.device).to(_child_module.weight.dtype)
 
                 _module._modules[name] = _tmp
 
                 # Allow the LoRSA weights to update
-                self.require_grad_params.append({'params': _module._modules[name].lora_up.parameters()})
-                self.require_grad_params.append({'params': _module._modules[name].lora_down.parameters()})
-                self.require_grad_params.append({'params': _module._modules[name].sparse_linear.parameters()})
-                _module._modules[name].lora_up.weight.requires_grad = True
-                _module._modules[name].lora_down.weight.requires_grad = True
-                _module._modules[name].sparse_linear.weight.requires_grad = True
+                self.require_grad_params.append({'params': _module._modules[name].lora_up})
+                self.require_grad_params.append({'params': _module._modules[name].lora_down})
+                self.require_grad_params.append({'params': _module._modules[name].sparsity})
+                _module._modules[name].lora_up.requires_grad = True
+                _module._modules[name].lora_down.requires_grad = True
+                _module._modules[name].sparsity.requires_grad = True
                 self.names.append(name)
         change_forward(self.model.diffusion_model)
 
@@ -481,27 +467,30 @@ class CustomDiffusion(LatentDiffusion):
             self.require_grad_params = []
             self.names = []
 
-            for _module, name, _child_module in _find_modules(
+            for _module, name, _child_module in list(_find_modules(
                 model, None, search_class=[nn.Linear]
-            ):
+            )):
                 print("Linear Injection : injecting linear into ", name)
+                print(type(_child_module))
                 _tmp = InjectedLinear(
                     _child_module.in_features,
                     _child_module.out_features,
                     _child_module.bias is not None,
+                    _child_module.weight,
+                    _child_module.bias,
+                    device=_child_module.weight.device,
+                    dtype=_child_module.weight.dtype,
                     )
-                _tmp.injected_linear.weight = _child_module.weight
-                
-                if _child_module.bias is not None:
-                    _tmp.injected_linear.bias = _child_module.bias
-
-                _tmp.to(_child_module.weight.device).to(_child_module.weight.dtype)
+                assert torch.sum((_tmp.forward(torch.ones((1, _child_module.in_features))) - _child_module.forward(torch.ones((1, _child_module.in_features))))**2) == 0
 
                 _module._modules[name] = _tmp
 
                 # Allow the linear weights to update
-                self.require_grad_params.append({'params': _module._modules[name].extra_linear.parameters()})
-                _module._modules[name].extra_linear.weight.requires_grad = True
+                self.require_grad_params.append({'params': _tmp.injected_linear_weight})
+                _tmp.injected_linear_weight.requires_grad = True
+                if _tmp.injected_linear_bias:
+                    self.require_grad_params.append({'params': _tmp.injected_linear_bias})
+                    _tmp.injected_linear_bias.requires_grad = True
                 self.names.append(name)
         change_forward(self.model.diffusion_model)
 

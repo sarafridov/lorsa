@@ -448,16 +448,17 @@ class ShrinkageCallback(Callback):
         self.model = model
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
-        for name, layer in self.model.model.diffusion_model.named_parameters():
-            if 'sparse_linear' in name: 
-                # Do L1 shrinkage
-                matrix = layer.data
-                signs = torch.sign(matrix)
-                absvals = torch.abs(matrix)
-                absvals = torch.clamp(absvals - self.model.shrinkage_threshold, min=0)
-                sparsity = torch.sum(absvals.flatten() == 0) / len(absvals.flatten())
-                print(f'{sparsity*100} percent of the sparse weights are zero')
-                layer.data = signs * absvals
+        if pl_module.global_step > 100:
+            for name, layer in self.model.model.diffusion_model.named_parameters():
+                if 'sparsity' in name: 
+                    # Do L1 shrinkage
+                    matrix = layer
+                    signs = torch.sign(matrix)
+                    absvals = torch.abs(matrix)
+                    absvals = torch.clamp(absvals - self.model.shrinkage_threshold, min=0)
+                    sparsity = torch.sum(absvals.flatten() == 0) / len(absvals.flatten())
+                    print(f'{sparsity*100} percent of the sparse weights are zero')
+                    layer.data = signs * absvals
 
 
 class SetupCallback(Callback):
@@ -941,7 +942,7 @@ if __name__ == "__main__":
             del callbacks_cfg['ignore_keys_callback']
 
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
-        if config.model.params.freeze_model == 'crossattn-kv-lorsa':
+        if 'lorsa' in config.model.params.freeze_model:
             trainer_kwargs["callbacks"] = trainer_kwargs["callbacks"] + [ShrinkageCallback(model)]
 
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)

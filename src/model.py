@@ -270,9 +270,9 @@ def _find_modules(
                     # print(f'skipping {fullname}')
                     continue
                 # Sanity check: only edit crossattn k and v weights
-                if not any([keyword in fullname for keyword in ['to_k', 'to_v']]):
-                    # print(f'skipping {fullname}')
-                    continue
+                # if not any([keyword in fullname for keyword in ['to_k', 'to_v']]):
+                #     # print(f'skipping {fullname}')
+                #     continue
                 # Otherwise, yield it
                 # print(f'keeping {fullname}')
                 yield parent, name, module

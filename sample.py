@@ -132,6 +132,11 @@ def load_model_from_config(config, ckpt, verbose=False):
     if len(u) > 0 and verbose:
         print("unexpected keys:")
         print(u)
+    
+    param_count = 0.
+    for i in pl_sd:
+        param_count += pl_sd[i].numel()
+    print(f"SD Params: {param_count}")
 
     model.cuda()
     model.eval()

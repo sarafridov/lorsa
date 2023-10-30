@@ -159,7 +159,7 @@ class LorsaInjectedLinear(nn.Module):
         self.old_bias = old_bias
         self.lora_down = torch.nn.Parameter(torch.zeros((out_features, r), **factory_kwargs))
         self.lora_up = torch.nn.Parameter(torch.zeros((r, in_features), **factory_kwargs))
-        self.sparsity = torch.nn.Parameter(torch.randn((out_features, in_features), **factory_kwargs))
+        self.sparsity = torch.nn.Parameter(torch.zeros((out_features, in_features), **factory_kwargs))
         self.shrinkage_threshold = shrinkage_threshold
 
     def forward(self, x):
@@ -203,7 +203,7 @@ class InjectedLinear(nn.Module):
 
     def forward(self, x):
         weight = self.old_weight + self.injected_linear_weight
-        bias = self.old_bias + self.injected_linear_bias if self.old_bias else None
+        bias = self.old_bias + self.injected_linear_bias if self.old_bias is not None else None
         output = F.linear(x, weight, bias=bias)
         return output
 
@@ -469,8 +469,8 @@ class CustomDiffusion(LatentDiffusion):
             for _module, name, _child_module in list(_find_modules(
                 model, None, search_class=[nn.Linear]
             )):
-                print("Linear Injection : injecting linear into ", name)
-                print(type(_child_module))
+                # print("Linear Injection : injecting linear into ", name)
+                # print(type(_child_module))
                 _tmp = InjectedLinear(
                     _child_module.in_features,
                     _child_module.out_features,
@@ -487,7 +487,7 @@ class CustomDiffusion(LatentDiffusion):
                 # Allow the linear weights to update
                 self.require_grad_params.append({'params': _tmp.injected_linear_weight})
                 _tmp.injected_linear_weight.requires_grad = True
-                if _tmp.injected_linear_bias:
+                if _tmp.injected_linear_bias is not None:
                     self.require_grad_params.append({'params': _tmp.injected_linear_bias})
                     _tmp.injected_linear_bias.requires_grad = True
                 self.names.append(name)

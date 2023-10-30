@@ -304,6 +304,13 @@ def main():
             del delta_st['state_dict']['embed']
             print(embed.shape)
         delta_st = delta_st['state_dict']
+        param_count = 0.
+        for i in delta_st:
+            if "sparsity" in i:
+                param_count += torch.count_nonzero(delta_st[i])
+            elif "lora_" in i:
+                param_count += delta_st[i].numel()
+        print(f"Params: {param_count}")
         if opt.compress:
             for name in delta_st.keys():
                 if 'to_k' in name or 'to_v' in name:

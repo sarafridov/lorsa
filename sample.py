@@ -113,7 +113,7 @@ def load_model_from_config(config, ckpt, verbose=False):
     pl_sd = torch.load(ckpt, map_location="cpu")
     if "global_step" in pl_sd:
         print(f"Global Step: {pl_sd['global_step']}")
-    sd = pl_sd["state_dict"]
+    sd = pl_sd
     model = instantiate_from_config(config.model)
 
     token_weights = sd["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]

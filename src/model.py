@@ -424,7 +424,6 @@ class CustomDiffusion(LatentDiffusion):
                 self.require_grad_params.append({'params': _module._modules[name].lora_down})
                 _module._modules[name].lora_up.requires_grad = True
                 _module._modules[name].lora_down.requires_grad = True
-                _module._modules[name].sparsity.requires_grad = True
                 self.names.append(name)
         change_forward(self.model.diffusion_model)
 

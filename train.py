@@ -782,7 +782,7 @@ if __name__ == "__main__":
 
         model = instantiate_from_config(config.model)
         if opt.resume_from_checkpoint_custom:
-            st = torch.load(opt.resume_from_checkpoint_custom, map_location='cpu')["state_dict"]
+            st = torch.load(opt.resume_from_checkpoint_custom, map_location='cpu')
             token_weights = st["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]
             del st["cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"]
             model.load_state_dict(st, strict=False)
